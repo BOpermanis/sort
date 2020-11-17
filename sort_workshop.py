@@ -45,8 +45,6 @@ except ImportError:
         x, y = linear_sum_assignment(cost_matrix)
         return np.array(list(zip(x, y)))
 
-
-
 def iou_batch(bb_test, bb_gt):
     """
     From SORT: Computes IUO between two bboxes in the form [x1,y1,x2,y2]
@@ -211,77 +209,58 @@ class Sort(object):
         # get predicted locations from existing trackers.
         trks = np.zeros((len(self.trackers), 5))
         to_del = []
-        ret = []
+        outputs = []
         for t, trk in enumerate(trks):
             pos = self.trackers[t].predict()[0]
             trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
             if np.any(np.isnan(pos)):
                 to_del.append(t)
-
         trks = np.ma.compress_rows(np.ma.masked_invalid(trks))
         for t in reversed(to_del):
             self.trackers.pop(t)
 
         matched, unmatched_dets, unmatched_trks = associate_detections_to_trackers(dets, trks, self.iou_threshold)
 
-        # update matched trackers with assigned detections
-        for m in matched:
-            self.trackers[m[1]].update(dets[m[0], :])
+        # TODO update matched trackers with assigned detections
 
-        # create and initialise new trackers for unmatched detections
-        for i in unmatched_dets:
-            trk = KalmanBoxTracker(dets[i, :])
-            self.trackers.append(trk)
+        # TODO create and initialise new trackers for unmatched detections
 
         i = len(self.trackers)
         for trk in reversed(self.trackers):
             d = trk.get_state()[0]
 
-            if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
-                ret.append(np.concatenate((d, [trk.id + 1])).reshape(1, -1))  # +1 as MOT benchmark requires positive
+            # TODO criterioin for objects for visualization
+            if False:
+                outputs.append(np.concatenate((d, [trk.id + 1])).reshape(1, -1))  # +1 as MOT benchmark requires positive
+
             i -= 1
 
-            # remove dead tracklet
-            if trk.time_since_update > self.max_age:
+            # TODO criterion for object elimination
+            if True:
                 self.trackers.pop(i)
 
-        if len(ret) > 0:
-            return np.concatenate(ret)
+        if len(outputs) > 0:
+            return np.concatenate(outputs)
         return np.empty((0, 5))
-
-
-def parse_args():
-    """Parse input arguments."""
-    parser = argparse.ArgumentParser(description='SORT demo')
-    parser.add_argument('--display', dest='display', help='Display online tracker output (slow) [False]',
-                        action='store_true')
-    parser.add_argument("--seq_path", help="Path to detections.", type=str, default='data')
-    parser.add_argument("--phase", help="Subdirectory in seq_path.", type=str, default='train')
-    parser.add_argument("--max_age",
-                        help="Maximum number of frames to keep alive a track without associated detections.",
-                        type=int, default=1)
-    parser.add_argument("--min_hits",
-                        help="Minimum number of associated detections before track is initialised.",
-                        type=int, default=3)
-    parser.add_argument("--iou_threshold", help="Minimum IOU for match.", type=float, default=0.3)
-    args = parser.parse_args()
-    return args
 
 
 def id2color(i):
     np.random.seed(i)
     return tuple(map(int, np.random.randint(0, 255, (3,))))
 
+
 if __name__ == '__main__':
     from pprint import pprint
+    from time import sleep
     import cv2
 
     # all train
     seq_path = os.path.dirname(__file__)
     seq_path = os.path.join(seq_path, "2DMOT2015", "train")
 
-
-    flag_show_tracker = True
+    flag_show_tracker = False
+    resolution_ratio = 0.8
+    sec_sleep = 0.6
 
     total_time = 0.0
     total_frames = 0
@@ -295,7 +274,8 @@ if __name__ == '__main__':
     img_dir = os.path.join(img_dir, "img1")
     img_paths = sorted(glob.glob(os.path.join(img_dir, "*.jpg")))
 
-    mot_tracker = Sort()  # create instance of the SORT tracker
+    if flag_show_tracker:
+        mot_tracker = Sort()  # create instance of the SORT tracker
     seq_dets = np.loadtxt(seq_dets_fn, delimiter=',')
     seq = seq_dets_fn[pattern.find('*'):].split('/')[0]
 
@@ -305,47 +285,26 @@ if __name__ == '__main__':
         nr_frame += 1  # detection and frame numbers begin at 1
         dets = seq_dets[seq_dets[:, 0] == nr_frame, 2:7]
         dets[:, 2:4] += dets[:, 0:2]  # convert to [x1,y1,w,h] to [x1,y1,x2,y2]
+
         total_frames += 1
 
         frame = cv2.imread(img_path)
         # frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-        trackers = mot_tracker.update(dets)
+        if flag_show_tracker:
+            trackers = mot_tracker.update(dets)
+            for d in trackers:
+                d = d.astype(np.int32)
+                color = id2color(d[-1]) if flag_show_tracker else (0, 255, 0)
+                cv2.rectangle(frame, tuple(d[:2]), tuple(d[2:4]), color, 4)
+        else:
+            for d in dets.astype(int):
+                cv2.rectangle(frame, tuple(d[:2]), tuple(d[2:4]), (0, 255, 0), 4)
 
-        for d in trackers:
-            d = d.astype(np.int32)
-            color = id2color(d[-1]) if flag_show_tracker else (0, 255, 0)
-            cv2.rectangle(frame, tuple(d[:2]), tuple(d[2:4]), color, 4)
-
-            # ax1.add_patch(patches.Rectangle((d[0], d[1]), d[2] - d[0], d[3] - d[1], fill=False, lw=3,
-            #                                 ec=colours[d[4] % 32, :]))
-
-        # fig.canvas.flush_events()
-        # plt.draw()
-        # ax1.cla()
-
+        h, w = frame.shape[:2]
+        h, w = map(lambda _: int(_*resolution_ratio), (h, w))
+        frame = cv2.resize(frame, (w, h))
         cv2.imshow('Frame', frame)
+        sleep(sec_sleep)
         if cv2.waitKey(25) & 0xFF == ord('q'):
             break
-#
-# if (display):
-#
-#
-#             ax1.imshow(im)
-#             plt.title(seq + ' Tracked Targets')
-#
-#         start_time = time.time()
-#         trackers = mot_tracker.update(dets)
-#         cycle_time = time.time() - start_time
-#         total_time += cycle_time
-#
-#         for d in trackers:
-#             if (display):
-#                 d = d.astype(np.int32)
-#                 ax1.add_patch(patches.Rectangle((d[0], d[1]), d[2] - d[0], d[3] - d[1], fill=False, lw=3,
-#                                                 ec=colours[d[4] % 32, :]))
-#
-#         if (display):
-#             fig.canvas.flush_events()
-#             plt.draw()
-#             ax1.cla()
